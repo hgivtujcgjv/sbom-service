@@ -2,45 +2,74 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
-	"scaserv/sbom-serv/internal/config"
-	"scaserv/sbom-serv/internal/httpapi"
-	"scaserv/sbom-serv/internal/worker"
 	"syscall"
-	"database/sql"
+	"time"
+
+	_ "github.com/jackc/pgx/v5/stdlib"
+
+	"YOUR/MODULE/PATH/internal/config"
+	"YOUR/MODULE/PATH/internal/httpapi"
+	"YOUR/MODULE/PATH/internal/taskstore"
+	"YOUR/MODULE/PATH/internal/worker"
 )
 
 func main() {
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
-	paths := config.NewUploadPaths("./uploads")
-	if err := paths.Ensure(); err != nil {
-		log.Fatal("mkdir uploads: %v", err)
+	go func() {
+		ch := make(chan os.Signal, 1)
+		signal.Notify(ch, syscall.SIGINT, syscall.SIGTERM)
+		<-ch
+		cancel()
+	}()
+
+	dsn := "DATABASE_URL"
+
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer db.Close()
+
+	db.SetMaxOpenConns(20)
+	db.SetMaxIdleConns(20)
+	db.SetConnMaxLifetime(30 * time.Minute)
+
+	if err := db.PingContext(ctx); err != nil {
+		log.Fatal(err)
 	}
 
-	worker.StartWorker(ctx, paths, 4) // поменять количество потоков с генерацией
+	store := taskstore.New(db)
+
+	paths := config.MustLoadUploadPaths()
+	
+	go worker.StartWorker(ctx, store, paths, 4)
+
 	mux := http.NewServeMux()
-
-	mux.Handle("/scan", httpapi.UploadZipHandler(paths))
-
-	mux.Handle("/info", httpapi.ScanInfoHandler(paths))
+	mux.Handle("/upload", httpapi.UploadZipHandler(paths, store))
+	mux.Handle("/scan", httpapi.ScanInfoHandler(paths, store))
 
 	srv := &http.Server{
-		Addr:    ":8082",
-		Handler: mux,
+		Addr:              ":8080",
+		Handler:           mux,
+		ReadHeaderTimeout: 10 * time.Second,
 	}
 
 	go func() {
 		<-ctx.Done()
-		_ = srv.Shutdown(context.Background())
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_ = srv.Shutdown(shutdownCtx)
 	}()
 
-	log.Println("Server ready")
-	if err := srv.ListenAndServe(); err != nil {
-		log.Fatalf("server error %v", err)
+	log.Println("listening on", srv.Addr)
+	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		log.Fatal(err)
 	}
 }
