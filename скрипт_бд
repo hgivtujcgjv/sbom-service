@@ -1,0 +1,14 @@
+DO $$ BEGIN
+    IF NOT EXISTS(SELECT 1 FROM pg_type WHERE typename = 'sbom_task_status') THEN
+        CREATE TYPE sbom_task_status AS ENUM('queued','running','done','failed');
+    END IF;
+END $$;
+
+CREATE TABLE IF NOT EXISTS sbom_tasks(
+    id uuid PRIMARY KEY,
+    status sbom_task_status NOT NULL,
+    ts timestamptz NOT NULL DEFAULT now(),
+    error text NULL
+);
+
+CREATE INDEX IF NOT EXISTS sbom_task_status_ts_idx ON sbom_tasks(status,ts);
