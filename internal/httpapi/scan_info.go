@@ -17,20 +17,14 @@ func ScanInfoHandler(paths config.UploadPaths) http.HandlerFunc {
 			return
 		}
 
-		stPath := filepath.Join(paths.Status, "status-"+id+".json")
-		resPath := filepath.Join(paths.Results, "result-"+id+".json")
-
-		data, err := os.ReadFile(stPath)
-		if err != nil {
+		st, err := store.Get(r.Context(), id)
+			if err != nil {
 			http.Error(w, "task not found", http.StatusNotFound)
 			return
 		}
 
-		var st storage.TaskStatus
-		if err := json.Unmarshal(data, &st); err != nil {
-			http.Error(w, "broken status file", http.StatusInternalServerError)
-			return
-		}
+		resPath := filepath.Join(paths.Results, "result-"+id+".json")
+
 
 		switch st.Status {
 		case "queued", "running":
