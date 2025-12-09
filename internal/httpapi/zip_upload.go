@@ -76,15 +76,20 @@ func UploadZipHandler(paths config.UploadPaths) http.HandlerFunc {
 
 		id := uuid.New().String()
 
+		if err := store.Enqueue(r.Context(), id); err != nil {
+			_ = os.Remove(zipPath)
+			http.Error(w, "failed to enqueue task", http.StatusInternalServerError)
+			return
+		}
+
 		zipPath := filepath.Join(paths.Zips, "zip-"+id+".zip")
-		stPath := filepath.Join(paths.Status, "status-"+id+".json")
+
 
 		if err := storage.SaveStreamAtomic(zipPath, bodyReader); err != nil {
 			http.Error(w, "failed to save zip", http.StatusBadRequest)
 			return
 		}
 
-		_ = storage.SaveFile(stPath, storage.TaskStatus{Status: "queued"})
 
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
