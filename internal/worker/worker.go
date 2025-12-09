@@ -40,48 +40,60 @@ func processTask(ctx context.Context, zipPath, resultPath string) error {
 
 	return os.Rename(tmp, resultPath)
 }
-
-func StartWorker(ctx context.Context, paths config.UploadPaths, maxParallel int) {
-	if maxParallel <= 0 {
-		maxParallel = 4
-	}
+func StartWorker(ctx context.Context, store *taskstore.Store, paths config.UploadPaths, maxParallel int) {
 	sem := make(chan struct{}, maxParallel)
+	
+	ticker := time.NewTicker(300 * time.Millisecond)
+	defer ticker.Stop()
 
-	go func() {
-		for {
+	for {
 		select {
 		case <-ctx.Done():
+			// завершения 
+			for i := 0; i < maxParallel; i++ {
+				select {
+				case sem <- struct{}{}:
+				case <-time.After(3 * time.Second):
+					return
+				}
+			}
 			return
-		default:
-		}
 
-		task, ok, err := store.ClaimNextQueued(ctx)
-		if err != nil {
-			time.Sleep(500 * time.Millisecond)
-			continue
-		}
-		if !ok {
-			time.Sleep(500 * time.Millisecond)
-			continue
-		}
-
-		id := task.ID
-		zipPath := filepath.Join(paths.Zips, "zip-"+id+".zip")
-		resultPath := filepath.Join(paths.Results, "result-"+id+".json")
-
-		sem <- struct{}{}
-		go func(id, zipPath, resultPath string) {
-			defer func() { <-sem }()
-
-			if err := processTask(ctx, zipPath, resultPath); err != nil {
-				msg := err.Error()
-				_ = store.SetStatus(ctx, id, taskstore.StatusFailed, &msg)
-				return
+		case <-ticker.C:
+			select {
+			case sem <- struct{}{}:
+				// слот получен
+			default:
+				// нет свободных слотов 
+				continue
 			}
 
-			_ = os.Remove(zipPath)
-			_ = store.SetStatus(ctx, id, taskstore.StatusDone, nil)
-		}(id, zipPath, resultPath)
+			task, ok, err := store.ClaimNextQueued(ctx)
+			if err != nil {
+				<-sem
+				continue
+			}
+			if !ok {
+				<-sem
+				continue
+			}
+
+			id := task.ID
+			zipPath := filepath.Join(paths.Zips, "zip-"+id+".zip")
+			resultPath := filepath.Join(paths.Results, "result-"+id+".json")
+
+			go func(id, zipPath, resultPath string) {
+				defer func() { <-sem }()
+
+				if err := processTask(ctx, zipPath, resultPath); err != nil {
+					msg := err.Error()
+					_ = store.SetStatus(ctx, id, taskstore.StatusFailed, &msg)
+					return
+				}
+
+				_ = os.Remove(zipPath)
+				_ = store.SetStatus(ctx, id, taskstore.StatusDone, nil)
+			}(id, zipPath, resultPath)
+		}
 	}
-	}()
 }
