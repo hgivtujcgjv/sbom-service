@@ -49,39 +49,39 @@ func StartWorker(ctx context.Context, paths config.UploadPaths, maxParallel int)
 
 	go func() {
 		for {
-			select {
-			case <-ctx.Done():
-				return
-			default:
-			}
-
-			task, ok, err := store.ClaimNextQueued(ctx)
-			if err != nil {
-				time.Sleep(500 * time.Millisecond)
-				continue
-			}
-			if !ok {
-				time.Sleep(500 * time.Millisecond)
-				continue
-			}
-
-			id := task.ID
-			zipPath := filepath.Join(paths.Zips, "zip-"+id+".zip")
-			resultPath := filepath.Join(paths.Results, "result-"+id+".json")
-
-			sem <- struct{}{}
-			go func(id, zipPath, resultPath string) {
-				defer func() { <-sem }()
-
-				if err := processTask(ctx, zipPath, resultPath); err != nil {
-					msg := err.Error()
-					_ = store.SetStatus(ctx, id, taskstore.StatusFailed, &msg)
-					return
-				}
-
-				_ = os.Remove(zipPath)
-				_ = store.SetStatus(ctx, id, taskstore.StatusDone, nil)
-			}(id, zipPath, resultPath)
+		select {
+		case <-ctx.Done():
+			return
+		default:
 		}
+
+		task, ok, err := store.ClaimNextQueued(ctx)
+		if err != nil {
+			time.Sleep(500 * time.Millisecond)
+			continue
+		}
+		if !ok {
+			time.Sleep(500 * time.Millisecond)
+			continue
+		}
+
+		id := task.ID
+		zipPath := filepath.Join(paths.Zips, "zip-"+id+".zip")
+		resultPath := filepath.Join(paths.Results, "result-"+id+".json")
+
+		sem <- struct{}{}
+		go func(id, zipPath, resultPath string) {
+			defer func() { <-sem }()
+
+			if err := processTask(ctx, zipPath, resultPath); err != nil {
+				msg := err.Error()
+				_ = store.SetStatus(ctx, id, taskstore.StatusFailed, &msg)
+				return
+			}
+
+			_ = os.Remove(zipPath)
+			_ = store.SetStatus(ctx, id, taskstore.StatusDone, nil)
+		}(id, zipPath, resultPath)
+	}
 	}()
 }
