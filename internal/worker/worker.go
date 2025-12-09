@@ -55,52 +55,33 @@ func StartWorker(ctx context.Context, paths config.UploadPaths, maxParallel int)
 			default:
 			}
 
-			statusFiles, _ := filepath.Glob(filepath.Join(paths.Status, "status-*.json"))
-
-			for _, stPath := range statusFiles {
-				data, err := os.ReadFile(stPath)
-				if err != nil {
-					continue
-				}
-
-				var st storage.TaskStatus
-				if err := json.Unmarshal(data, &st); err != nil {
-					continue
-				}
-				if st.Status != "queued" {
-					continue
-				}
-
-				base := filepath.Base(stPath)
-				id := strings.TrimSuffix(strings.TrimPrefix(base, "status-"), ".json")
-
-				zipPath := filepath.Join(paths.Zips, "zip-"+id+".zip")
-				resultPath := filepath.Join(paths.Results, "result-"+id+".json")
-
-				if _, err := os.Stat(zipPath); err != nil {
-					continue
-				}
-
-				if err := storage.SaveFile(stPath, storage.TaskStatus{Status: "running"}); err != nil {
-					continue
-				}
-
-				sem <- struct{}{}
-				go func(id, zipPath, stPath, resultPath string) {
-					defer func() { <-sem }()
-
-					if err := processTask(ctx, zipPath, resultPath); err != nil {
-						_ = storage.SaveFile(stPath, storage.TaskStatus{Status: "failed", Error: err.Error()})
-						return
-					}
-
-					_ = os.Remove(zipPath)
-
-					_ = storage.SaveFile(stPath, storage.TaskStatus{Status: "done"})
-				}(id, zipPath, stPath, resultPath)
+			task, ok, err := store.ClaimNextQueued(ctx)
+			if err != nil {
+				time.Sleep(500 * time.Millisecond)
+				continue
+			}
+			if !ok {
+				time.Sleep(500 * time.Millisecond)
+				continue
 			}
 
-			time.Sleep(500 * time.Millisecond)
+			id := task.ID
+			zipPath := filepath.Join(paths.Zips, "zip-"+id+".zip")
+			resultPath := filepath.Join(paths.Results, "result-"+id+".json")
+
+			sem <- struct{}{}
+			go func(id, zipPath, resultPath string) {
+				defer func() { <-sem }()
+
+				if err := processTask(ctx, zipPath, resultPath); err != nil {
+					msg := err.Error()
+					_ = store.SetStatus(ctx, id, taskstore.StatusFailed, &msg)
+					return
+				}
+
+				_ = os.Remove(zipPath)
+				_ = store.SetStatus(ctx, id, taskstore.StatusDone, nil)
+			}(id, zipPath, resultPath)
 		}
 	}()
 }
