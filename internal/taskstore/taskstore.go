@@ -1,9 +1,9 @@
-// internal/taskstore/postgres.go
 package taskstore
 
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"time"
 )
 
@@ -23,7 +23,9 @@ type Task struct {
 	Error     *string
 }
 
-type Store struct{ db *sql.DB }
+type Store struct {
+	db *sql.DB
+}
 
 func New(db *sql.DB) *Store { return &Store{db: db} }
 
@@ -38,6 +40,7 @@ func (s *Store) Enqueue(ctx context.Context, id string) error {
 func (s *Store) Get(ctx context.Context, id string) (Task, error) {
 	var t Task
 	var errNS sql.NullString
+
 	err := s.db.QueryRowContext(ctx, `
 		SELECT id::text, status::text, ts, error
 		FROM sbom_tasks
@@ -53,33 +56,46 @@ func (s *Store) Get(ctx context.Context, id string) (Task, error) {
 }
 
 func (s *Store) ClaimNextQueued(ctx context.Context) (Task, bool, error) {
-	var t Task
-	var errNS sql.NullString
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
+	if err != nil {
+		return Task{}, false, err
+	}
+	defer func() { _ = tx.Rollback() }()
 
-	err := s.db.QueryRowContext(ctx, `
-		WITH cte AS (
-		  SELECT id
-		  FROM sbom_tasks
-		  WHERE status = 'queued'
-		  ORDER BY ts
-		  FOR UPDATE SKIP LOCKED
-		  LIMIT 1
-		)
-		UPDATE sbom_tasks t
-		SET status='running', ts=now(), error=NULL
-		FROM cte
-		WHERE t.id = cte.id
-		RETURNING t.id::text, t.status::text, t.ts, t.error
-	`).Scan(&t.ID, &t.Status, &t.Timestamp, &errNS)
+	var id string
+	err = tx.QueryRowContext(ctx, `
+		SELECT id::text
+		FROM sbom_tasks
+		WHERE status = 'queued'
+		ORDER BY ts ASC
+		FOR UPDATE SKIP LOCKED
+		LIMIT 1
+	`).Scan(&id)
 
-	if err == sql.ErrNoRows {
-		return Task{}, false, nil // очереди нет
+	if errors.Is(err, sql.ErrNoRows) {
+		_ = tx.Commit()
+		return Task{}, false, nil
 	}
 	if err != nil {
 		return Task{}, false, err
 	}
-	if errNS.Valid {
-		t.Error = &errNS.String
+
+	_, err = tx.ExecContext(ctx, `
+		UPDATE sbom_tasks
+		SET status = 'running', ts = now(), error = NULL
+		WHERE id = $1
+	`, id)
+	if err != nil {
+		return Task{}, false, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return Task{}, false, err
+	}
+
+	t, err := s.Get(ctx, id)
+	if err != nil {
+		return Task{}, false, err
 	}
 	return t, true, nil
 }
