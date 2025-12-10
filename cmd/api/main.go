@@ -48,7 +48,16 @@ func main() {
 	if err := db.PingContext(ctx); err != nil {
 		log.Fatal(err)
 	}
+	
+	cfg := janitor.DefaultConfig()
+	cfg.Retention = 24 * time.Hour
+	cfg.RunningTimeout = 30 * time.Minute
+	cfg.RunningTimeoutAction = janitor.RunningFail
+	cfg.Every = 1 * time.Minute
 
+	j := janitor.New(db, paths, cfg)
+	go j.Start(ctx)
+	
 	store := taskstore.New(db)
 
 	paths := config.NewUploadPaths("./uploads")
