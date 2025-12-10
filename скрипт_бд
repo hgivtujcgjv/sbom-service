@@ -1,5 +1,6 @@
-DO $$ BEGIN
-    IF NOT EXISTS(SELECT 1 FROM pg_type WHERE typename = 'sbom_task_status') THEN
+DO $$ 
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM pg_type WHERE typname = 'sbom_task_status') THEN
         CREATE TYPE sbom_task_status AS ENUM('queued','running','done','failed');
     END IF;
 END $$;
