@@ -12,10 +12,10 @@ import (
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 
-	"YOUR/MODULE/PATH/internal/config"
-	"YOUR/MODULE/PATH/internal/httpapi"
-	"YOUR/MODULE/PATH/internal/taskstore"
-	"YOUR/MODULE/PATH/internal/worker"
+	"scaserv/sbom-serv/internal/config"
+	"scaserv/sbom-serv/internal/httpapi"
+	"scaserv/sbom-serv/internal/taskstore"
+	"scaserv/sbom-serv/internal/worker"
 )
 
 func main() {
@@ -29,12 +29,16 @@ func main() {
 		cancel()
 	}()
 
-	dsn := "DATABASE_URL"
+	dsn := "postgres://postgres:password@localhost:5432/postgres?sslmode=disable"
 
 	db, err := sql.Open("pgx", dsn)
 	if err != nil {
 		log.Fatal(err)
 	}
+	if err2 := db.Ping(); err2 != nil {
+		log.Fatal(err2)
+	}
+
 	defer db.Close()
 
 	db.SetMaxOpenConns(20)
@@ -47,16 +51,16 @@ func main() {
 
 	store := taskstore.New(db)
 
-	paths := config.MustLoadUploadPaths()
-	
+	paths := config.NewUploadPaths("./uploads")
+
 	go worker.StartWorker(ctx, store, paths, 4)
 
 	mux := http.NewServeMux()
-	mux.Handle("/upload", httpapi.UploadZipHandler(paths, store))
-	mux.Handle("/scan", httpapi.ScanInfoHandler(paths, store))
+	mux.Handle("/scan", httpapi.UploadZipHandler(paths, store))
+	mux.Handle("/scan/info", httpapi.ScanInfoHandler(paths, store))
 
 	srv := &http.Server{
-		Addr:              ":8080",
+		Addr:              ":8082",
 		Handler:           mux,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
