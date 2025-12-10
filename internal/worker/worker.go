@@ -3,14 +3,12 @@ package worker
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"scaserv/sbom-serv/internal/config"
-	"scaserv/sbom-serv/internal/storage"
-	"strings"
+	"scaserv/sbom-serv/internal/taskstore"
 	"time"
 )
 
@@ -42,14 +40,14 @@ func processTask(ctx context.Context, zipPath, resultPath string) error {
 }
 func StartWorker(ctx context.Context, store *taskstore.Store, paths config.UploadPaths, maxParallel int) {
 	sem := make(chan struct{}, maxParallel)
-	
+
 	ticker := time.NewTicker(300 * time.Millisecond)
 	defer ticker.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
-			// завершения 
+			// завершения
 			for i := 0; i < maxParallel; i++ {
 				select {
 				case sem <- struct{}{}:
@@ -64,7 +62,7 @@ func StartWorker(ctx context.Context, store *taskstore.Store, paths config.Uploa
 			case sem <- struct{}{}:
 				// слот получен
 			default:
-				// нет свободных слотов 
+				// нет свободных слотов
 				continue
 			}
 
