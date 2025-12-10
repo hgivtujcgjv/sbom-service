@@ -10,8 +10,8 @@ import (
 
 	"github.com/google/uuid"
 
-	"YOUR/MODULE/PATH/internal/config"
-	"YOUR/MODULE/PATH/internal/taskstore"
+	"scaserv/sbom-serv/internal/config"
+	"scaserv/sbom-serv/internal/taskstore"
 )
 
 func UploadZipHandler(paths config.UploadPaths, store *taskstore.Store) http.HandlerFunc {
@@ -29,14 +29,13 @@ func UploadZipHandler(paths config.UploadPaths, store *taskstore.Store) http.Han
 		id := uuid.NewString()
 		zipPath := filepath.Join(paths.Zips, "zip-"+id+".zip")
 
-
 		if err := saveBodyAtomic(zipPath, r.Body); err != nil {
 			http.Error(w, "failed to save zip: "+err.Error(), http.StatusBadRequest)
 			return
 		}
 
 		if err := store.Enqueue(r.Context(), id); err != nil {
-			_ = os.Remove(zipPath) 
+			_ = os.Remove(zipPath)
 			http.Error(w, "failed to enqueue: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
