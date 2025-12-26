@@ -1,0 +1,165 @@
+openapi: 3.0.3
+info:
+  title: SBOM Generator Service API
+  version: 1.0.0
+  description: |
+    Сервис генерации SBOM по загруженному ZIP-архиву.
+
+servers:
+  - url: http://localhost:8082
+
+paths:
+  /scan:
+    post:
+      summary: Upload ZIP for SBOM generation
+      description: |
+        Принимает ZIP (application/zip) с исходниками/артефактами.
+        Создаёт задачу на генерацию SBOM в ответе возвращается идентификатор (id)
+        и её текущий статус.
+      requestBody:
+        required: true
+        content:
+          application/zip:
+            schema:
+              type: string
+              format: binary
+      responses:
+        "200":
+          description: Задача на генерацию SBOM успешно создана
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ZipUploadResponse"
+        "400":
+          description: Неверный запрос (повреждённый ZIP, пустое тело и т.п.)
+          content:
+            text/plain:
+              schema:
+                type: string
+        "415":
+          description: Неподдерживаемый тип содержимого (ожидается application/zip)
+          content:
+            text/plain:
+              schema:
+                type: string
+        "500":
+          description: Внутренняя ошибка сервера
+          content:
+            text/plain:
+              schema:
+                type: string
+
+  /scan/info:
+    get:
+      summary: Get SBOM generation status and result by zip_id
+      description: |
+        Возвращает статус задачи генерации SBOM по её идентификатору (zip_id).
+        
+        Поведение:
+        - Если задача ещё обрабатывается:
+          * HTTP 202 + JSON с zip_id и status=queued|running.
+        - Если задача завершилась с ошибкой:
+          * HTTP 200 + JSON с zip_id или status=failed и полем error.
+        - Если задача успешно завершена:
+          * При заголовке `Accept: application/zip` — вернётся бинарный ZIP с результатами.
+          * При любом другом Accept — вернётся JSON с zip_id, status=done и именем ZIP-файла.
+      parameters:
+        - name: id
+          in: query
+          required: true
+          schema:
+            type: string
+          description: Идентификатор ZIP-задачи (zip_id), полученный из POST /scan
+      responses:
+        "200":
+          description: Задача завершена (успешно или с ошибкой) либо ZIP готов к скачиванию
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ZipFailed"
+                  - $ref: "#/components/schemas/ZipReadyJson"
+            application/zip:
+              schema:
+                type: string
+                format: binary
+        "202":
+          description: Задача всё ещё в обработке
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ZipQueuedRunning"
+        "400":
+          description: Отсутствует или некорректный id
+          content:
+            text/plain:
+              schema:
+                type: string
+        "404":
+          description: Задача или результат не найдены
+          content:
+            text/plain:
+              schema:
+                type: string
+        "500":
+          description: Внутренняя ошибка сервера / ошибка чтения результата
+          content:
+            text/plain:
+              schema:
+                type: string
+
+
+components:
+  schemas:
+    ZipUploadResponse:
+      type: object
+      required: [zip_id, status]
+      properties:
+        zip_id:
+          type: string
+          description: Идентификатор загруженного ZIP и связанной задачи
+          example: "666b35bb-7ea1-4c99-a2be-af6a3a0bd09f"
+        status:
+          type: string
+          description: Текущий статус задачи
+          example: queued
+
+    ZipQueuedRunning:
+      type: object
+      required: [zip_id, status]
+      properties:
+        zip_id:
+          type: string
+          example: "666b35bb-7ea1-4c99-a2be-af6a3a0bd09f"
+        status:
+          type: string
+          description: queued или running
+          example: running
+
+    ZipFailed:
+      type: object
+      required: [zip_id, status, error]
+      properties:
+        zip_id:
+          type: string
+        status:
+          type: string
+          example: failed
+        error:
+          type: string
+          example: "cannot create sbom zip"
+
+    ZipReadyJson:
+      type: object
+      required: [zip_id, status, zip]
+      properties:
+        zip_id:
+          type: string
+          description: Идентификатор задачи
+        status:
+          type: string
+          example: done
+        zip:
+          type: string
+          description: Имя готового файла с результатами, который можно запросить с Accept:\ application/zip
+          example: "result-666b35bb-7ea1-4c99-a2be-af6a3a0bd09f.zip"
