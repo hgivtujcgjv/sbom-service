@@ -10,8 +10,8 @@ import (
 
 	"github.com/google/uuid"
 
-	"scaserv/sbom-serv/internal/config"
-	"scaserv/sbom-serv/internal/taskstore"
+	"sbom-serv/internal/config"
+	"sbom-serv/internal/taskstore"
 )
 
 func UploadZipHandler(paths config.UploadPaths, store *taskstore.Store) http.HandlerFunc {
