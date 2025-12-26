@@ -7,8 +7,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"scaserv/sbom-serv/internal/config"
-	"scaserv/sbom-serv/internal/taskstore"
+	"sbom-serv/internal/config"
+	"sbom-serv/internal/taskstore"
 	"time"
 )
 
