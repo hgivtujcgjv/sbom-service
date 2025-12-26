@@ -7,8 +7,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"scaserv/sbom-serv/internal/config"
-	"scaserv/sbom-serv/internal/taskstore"
+	"sbom-serv/internal/config"
+	"sbom-serv/internal/taskstore"
 )
 
 func ScanInfoHandler(paths config.UploadPaths, store *taskstore.Store) http.HandlerFunc {
