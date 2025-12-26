@@ -11,11 +11,13 @@ import (
 	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
+	httpSwagger "github.com/swaggo/http-swagger/v2"
 
-	"scaserv/sbom-serv/internal/config"
-	"scaserv/sbom-serv/internal/httpapi"
-	"scaserv/sbom-serv/internal/taskstore"
-	"scaserv/sbom-serv/internal/worker"
+	"sbom-serv/internal/config"
+	"sbom-serv/internal/httpapi"
+	"sbom-serv/internal/janitor"
+	"sbom-serv/internal/taskstore"
+	"sbom-serv/internal/worker"
 )
 
 func main() {
@@ -29,7 +31,7 @@ func main() {
 		cancel()
 	}()
 
-	dsn := "postgres://postgres:password@localhost:5432/postgres?sslmode=disable"
+	dsn := os.Getenv("DATABASE_URL")
 
 	db, err := sql.Open("pgx", dsn)
 	if err != nil {
@@ -48,26 +50,36 @@ func main() {
 	if err := db.PingContext(ctx); err != nil {
 		log.Fatal(err)
 	}
-	
-	cfg := janitor.DefaultConfig()
-	cfg.Retention = 24 * time.Hour
-	cfg.RunningTimeout = 30 * time.Minute
-	cfg.RunningTimeoutAction = janitor.RunningFail
-	cfg.Every = 1 * time.Minute
 
-	j := janitor.New(db, paths, cfg)
-	go j.Start(ctx)
-	
 	store := taskstore.New(db)
 
 	paths := config.NewUploadPaths("./uploads")
+	if err := paths.Ensure(); err != nil {
+		log.Fatal(err)
+	}
 
-	go worker.StartWorker(ctx, store, paths, 4)
+	cfg := janitor.DefaultConfig()
+	cfg.Retention = 24 * time.Hour     // интервал удаления задач
+	cfg.RunningTimeout = 3 * time.Hour // умершие задачи
+	cfg.RunningTimeoutAction = janitor.RunningFail
+	cfg.Every = 1 * time.Hour
+
+	j := janitor.New(db, paths, cfg)
+	go j.Start(ctx)
+	go worker.StartWorker(ctx, store, paths, 5) // тут поменять количетсво потоков
 
 	mux := http.NewServeMux()
 	mux.Handle("/scan", httpapi.UploadZipHandler(paths, store))
 	mux.Handle("/scan/info", httpapi.ScanInfoHandler(paths, store))
 
+	mux.HandleFunc("/openapi.yaml", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/yaml; charset=utf-8")
+		http.ServeFile(w, r, "./docs/openapi.yaml")
+	})
+
+	mux.Handle("/swagger/", httpSwagger.Handler(
+		httpSwagger.URL("/openapi.yaml"),
+	))
 	srv := &http.Server{
 		Addr:              ":8082",
 		Handler:           mux,
@@ -81,8 +93,10 @@ func main() {
 		_ = srv.Shutdown(shutdownCtx)
 	}()
 
+	certFile := "/app/certs/server-cert.pem"
+	keyFile := "/app/certs/SBOM_GEN.key"
 	log.Println("listening on", srv.Addr)
-	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+	if err := srv.ListenAndServeTLS(certFile, keyFile); err != nil && err != http.ErrServerClosed {
 		log.Fatal(err)
 	}
 }
