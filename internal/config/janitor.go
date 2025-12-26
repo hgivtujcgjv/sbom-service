@@ -4,20 +4,18 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"fmt"
 	"log"
 	"os"
 	"path/filepath"
+	"sbom-serv/internal/config"
 	"strings"
 	"time"
-
-	"scaserv/sbom-serv/internal/config"
 )
 
 type RunningAction string
 
 const (
-	RunningFail   RunningAction = "fail"
+	RunningFail    RunningAction = "fail"
 	RunningRequeue RunningAction = "requeue"
 )
 
@@ -46,14 +44,14 @@ type Config struct {
 
 func DefaultConfig() Config {
 	return Config{
-		Every:               1 * time.Minute,
-		Retention:           24 * time.Hour,
-		RunningTimeout:      30 * time.Minute,
+		Every:                1 * time.Minute,
+		Retention:            24 * time.Hour,
+		RunningTimeout:       30 * time.Minute,
 		RunningTimeoutAction: RunningFail,
-		TmpMaxAge:           10 * time.Minute,
-		BatchSize:           500,
+		TmpMaxAge:            10 * time.Minute,
+		BatchSize:            500,
 		// любое постоянное число, главное одинаковое на всех инстансах:
-		AdvisoryLockKey:     9876543,
+		AdvisoryLockKey: 9876543,
 	}
 }
 
@@ -101,7 +99,6 @@ func (j *Janitor) Start(ctx context.Context) {
 }
 
 func (j *Janitor) RunOnce(ctx context.Context) {
-	// Пинним соединение, потому что advisory lock "живет" на сессии.
 	conn, err := j.db.Conn(ctx)
 	if err != nil {
 		j.logf("[janitor] db.Conn: %v", err)
@@ -115,28 +112,27 @@ func (j *Janitor) RunOnce(ctx context.Context) {
 		return
 	}
 	if !ok {
-		// Другой инстанс уже чистит — спокойно выходим
 		return
 	}
 	defer func() {
 		_ = advisoryUnlock(context.Background(), conn, j.cfg.AdvisoryLockKey)
 	}()
 
-	// 1) опционально — обработка зависших running
+	//обработка зависших running
 	if j.cfg.RunningTimeout > 0 {
 		if err := j.handleStuckRunning(ctx, conn); err != nil {
 			j.logf("[janitor] handleStuckRunning: %v", err)
 		}
 	}
 
-	// 2) удалить старые done/failed и их файлы
+	//старые done/failed и их файлы
 	if j.cfg.Retention > 0 {
 		if err := j.cleanupOldDoneFailed(ctx, conn); err != nil {
 			j.logf("[janitor] cleanupOldDoneFailed: %v", err)
 		}
 	}
 
-	// 3) почистить *.tmp в папках
+	//*.tmp в папках
 	if err := cleanupTmpFiles(j.paths.Results, j.cfg.TmpMaxAge); err != nil {
 		j.logf("[janitor] cleanup tmp in results: %v", err)
 	}
@@ -156,8 +152,6 @@ func advisoryUnlock(ctx context.Context, conn *sql.Conn, key int64) error {
 	return err
 }
 
-// Помечаем "долго running" как failed или requeue.
-// ВАЖНО: это эвристика. Если реальная обработка длится дольше RunningTimeout — ставь timeout больше.
 func (j *Janitor) handleStuckRunning(ctx context.Context, conn *sql.Conn) error {
 	seconds := int64(j.cfg.RunningTimeout.Seconds())
 	if seconds <= 0 {
@@ -176,9 +170,6 @@ func (j *Janitor) handleStuckRunning(ctx context.Context, conn *sql.Conn) error 
 		errText = "failed by janitor: running too long"
 	}
 
-	// Запрос:
-	// UPDATE ... WHERE status='running' AND ts < now() - timeout
-	// timeout передаем как секунды, чтобы не мудрить с interval параметрами.
 	_, err := conn.ExecContext(ctx, `
 		UPDATE sbom_tasks
 		SET status = $1::sbom_task_status,
@@ -196,7 +187,6 @@ func (j *Janitor) cleanupOldDoneFailed(ctx context.Context, conn *sql.Conn) erro
 		return nil
 	}
 
-	// 1) Берем пачку "старых done/failed"
 	rows, err := conn.QueryContext(ctx, `
 		SELECT id::text, status::text
 		FROM sbom_tasks
@@ -230,22 +220,17 @@ func (j *Janitor) cleanupOldDoneFailed(ctx context.Context, conn *sql.Conn) erro
 		return nil
 	}
 
-	// 2) Для каждой задачи: удаляем файлы (если есть) + удаляем строку из БД
 	for _, it := range items {
 		id := it.id
 
-		// result файл обычно только у done, но если есть — удаляем и у failed тоже
 		_ = removeIfExists(filepath.Join(j.paths.Results, "result-"+id+".json"))
 		_ = removeIfExists(filepath.Join(j.paths.Results, "result-"+id+".json.tmp"))
 
-		// zip можно держать для дебага failed; если не нужно — чистим всегда
 		_ = removeIfExists(filepath.Join(j.paths.Zips, "zip-"+id+".zip"))
 		_ = removeIfExists(filepath.Join(j.paths.Zips, "zip-"+id+".zip.tmp"))
 
-		// Удаляем запись
 		_, err := conn.ExecContext(ctx, `DELETE FROM sbom_tasks WHERE id = $1`, id)
 		if err != nil {
-			// если удаление не удалось — не падаем всем прогоном, а идем дальше
 			j.logf("[janitor] delete row id=%s: %v", id, err)
 			continue
 		}
@@ -271,7 +256,6 @@ func cleanupTmpFiles(dir string, maxAge time.Duration) error {
 	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		// если папки нет — это скорее проблема конфигурации, но не фатально
 		if errors.Is(err, os.ErrNotExist) {
 			return nil
 		}
