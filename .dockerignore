@@ -1,0 +1,9 @@
+postgres_data/
+uploads/
+.git/
+*.log
+*.tmp
+*.zip
+*.json
+.DS_Store
+.env
