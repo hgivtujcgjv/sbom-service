@@ -1,12 +1,14 @@
 package httpapi
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/google/uuid"
 
@@ -26,14 +28,23 @@ func UploadZipHandler(paths config.UploadPaths, store *taskstore.Store) http.Han
 		}
 		defer r.Body.Close()
 
-		id := uuid.NewString()
-		zipPath := filepath.Join(paths.Zips, "zip-"+id+".zip")
-
-		if err := saveBodyAtomic(zipPath, r.Body); err != nil {
-			http.Error(w, "failed to save zip: "+err.Error(), http.StatusBadRequest)
+		if r.ContentLength == 0 {
+			http.Error(w, "empty body", http.StatusBadRequest)
 			return
 		}
 
+		body, ok := validateZipType(w, r)
+		if !ok {
+			return
+		}
+
+		id := uuid.NewString()
+		zipPath := filepath.Join(paths.Zips, "zip-"+id+".zip")
+
+		if err := saveBodyAtomic(zipPath, body); err != nil { // <-- body, не r.Body
+			http.Error(w, "failed to save zip: "+err.Error(), http.StatusBadRequest)
+			return
+		}
 		if err := store.Enqueue(r.Context(), id); err != nil {
 			_ = os.Remove(zipPath)
 			http.Error(w, "failed to enqueue: "+err.Error(), http.StatusInternalServerError)
@@ -84,4 +95,46 @@ func saveBodyAtomic(finalPath string, body io.Reader) error {
 		return err
 	}
 	return nil
+}
+
+func validateZipType(w http.ResponseWriter, r *http.Request) (io.Reader, bool) {
+	ct := r.Header.Get("Content-Type")
+	ct = strings.ToLower(strings.TrimSpace(strings.Split(ct, ";")[0]))
+	if ct != "application/zip" {
+		http.Error(w, "unsupported content-type", http.StatusUnsupportedMediaType)
+		return nil, false
+	}
+
+	const sniffBytes = 6
+	buf := make([]byte, sniffBytes)
+
+	n, err := io.ReadFull(r.Body, buf)
+	if err != nil && err != io.ErrUnexpectedEOF && err != io.EOF {
+		http.Error(w, "failed to read body", http.StatusBadRequest)
+		return nil, false
+	}
+	buf = buf[:n]
+	if len(buf) == 0 {
+		http.Error(w, "empty body", http.StatusBadRequest)
+		return nil, false
+	}
+	if !CheckMagicBytes(buf) {
+		http.Error(w, "invalid file type", http.StatusBadRequest)
+		return nil, false
+	}
+	return io.MultiReader(bytes.NewReader(buf), r.Body), true
+}
+
+func CheckMagicBytes(first []byte) bool {
+	sigs := [][]byte{
+		{'P', 'K', 0x03, 0x04},
+		{'P', 'K', 0x05, 0x06},
+		{'P', 'K', 0x07, 0x08},
+	}
+	for _, s := range sigs {
+		if bytes.HasPrefix(first, s) {
+			return true
+		}
+	}
+	return false
 }
