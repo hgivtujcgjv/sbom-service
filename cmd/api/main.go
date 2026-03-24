@@ -78,11 +78,12 @@ func main() {
 	})
 
 	mux.Handle("/swagger/", httpSwagger.Handler(
+		
 		httpSwagger.URL("/openapi.yaml"),
 	))
 	srv := &http.Server{
 		Addr:              ":8082",
-		Handler:           mux,
+		Handler:           corsMiddleware(mux),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
@@ -93,10 +94,33 @@ func main() {
 		_ = srv.Shutdown(shutdownCtx)
 	}()
 
-	certFile := "/app/certs/server-cert.pem"
-	keyFile := "/app/certs/SBOM_GEN.key"
+	certFile := "/app/certs/fullchain.pem"
+	keyFile := "/app/certs/tvles-dintp0005.esrt.sber.ru.key"
+	//certFile := "/app/certs/server-cert.pem"
+	//keyFile := "/app/certs/SBOM_GEN.key"
+	// instead ListenAndServe there was ListenAndServeTLS(certFile, keyFile) used before
 	log.Println("listening on", srv.Addr)
 	if err := srv.ListenAndServeTLS(certFile, keyFile); err != nil && err != http.ErrServerClosed {
 		log.Fatal(err)
 	}
+}
+
+
+
+
+
+
+func corsMiddleware(next http.Handler) http.Handler {
+    return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+        w.Header().Set("Access-Control-Allow-Origin", "*")
+        w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS, PATCH")
+        w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+
+        if r.Method == http.MethodOptions {
+            w.WriteHeader(http.StatusNoContent)
+            return
+        }
+
+        next.ServeHTTP(w, r)
+    })
 }
